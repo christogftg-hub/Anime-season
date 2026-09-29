@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Anime Season Board</title>
+<meta name="description" content="Every anime airing this season, with next-episode countdowns, trailers and your own watchlist.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f49c6'/%3E%3Cpath d='M12 9l12 7-12 7z' fill='white'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@500;700;900&family=Figtree:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <div class="eyebrow">Seasonal anime</div>
+      <h1><span id="seasonTitle">This season</span><span class="kanji">今期</span></h1>
+      <p class="sub" id="sub">Loading the season…</p>
+    </div>
+    <div class="account">
+      <select class="sel" id="season" aria-label="Season"></select>
+      <button class="btn primary" id="signInBtn" hidden>Sign in</button>
+      <div class="who" id="who" hidden>
+        <span class="avatar" id="avatar"></span>
+        <span class="n" id="whoName"></span>
+        <button class="ghost" id="signOutBtn">Sign out</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="controls">
+    <div class="tabs" role="tablist" aria-label="View">
+      <button role="tab" data-v="all" aria-selected="true">All <span class="ct" id="ct-all">0</span></button>
+      <button role="tab" data-v="watch" aria-selected="false">Watchlist <span class="ct" id="ct-watch">0</span></button>
+      <button role="tab" data-v="ignore" aria-selected="false">Ignored <span class="ct" id="ct-ignore">0</span></button>
+    </div>
+    <input class="search" id="q" type="search" placeholder="Search titles or studios" aria-label="Search">
+    <select class="sel" id="sort" aria-label="Sort">
+      <option value="next">Next episode first</option>
+      <option value="pop">Most popular</option>
+      <option value="score">Highest rated</option>
+      <option value="title">Title A–Z</option>
+      <option value="day">Group by weekday</option>
+    </select>
+    <label class="check small"><input type="checkbox" id="continuing"> Include shows continuing from last season</label>
+  </div>
+  <div class="genres" id="genres"></div>
+
+  <main id="list"><div class="empty"><b>Loading the season’s line-up</b>Pulling the latest schedule from AniList.</div></main>
+
+  <footer>Show data and artwork from <a href="https://anilist.co" target="_blank" rel="noopener">AniList</a>. Times are in your local time zone.</footer>
+</div>
+
+<div class="scrim" id="detail" hidden></div>
+
+<div class="scrim" id="authModal" hidden>
+  <div class="sheet narrow" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+    <div class="shead">
+      <h3 id="authTitle">Sign in</h3>
+      <button class="x" data-close aria-label="Close">×</button>
+    </div>
+    <form class="sbody" id="authForm" novalidate>
+      <div class="tabs" id="authTabs">
+        <button type="button" data-mode="signin" aria-selected="true">Sign in</button>
+        <button type="button" data-mode="signup" aria-selected="false">Create account</button>
+      </div>
+      <p class="hint" id="authHint">Sign in to keep your watchlist on every device.</p>
+      <label class="field" id="emailField">Email<input id="email" type="email" autocomplete="email" required></label>
+      <label class="field" id="passField">Password<input id="password" type="password" autocomplete="current-password" minlength="6" required></label>
+      <p class="error" id="authError" hidden></p>
+      <button class="btn primary wide" id="authSubmit" type="submit">Sign in</button>
+      <button type="button" class="linkish" id="forgot">Forgot your password?</button>
+    </form>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
