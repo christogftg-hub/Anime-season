@@ -225,6 +225,9 @@ function visible() {
   const nt = a => nextOf(a)?.t ?? Infinity;
   if (S.sort === "pop") xs.sort((a, b) => b.popularity - a.popularity);
   else if (S.sort === "score") xs.sort((a, b) => (b.score || 0) - (a.score || 0) || b.popularity - a.popularity);
+  else if (S.sort === "released") xs.sort((a, b) => (subOut(b) ?? -1) - (subOut(a) ?? -1) || (dubOf(b).out ?? -1) - (dubOf(a).out ?? -1) || b.popularity - a.popularity);
+  else if (S.sort === "dubbed") xs.sort((a, b) => (dubOf(b).out ?? -1) - (dubOf(a).out ?? -1) || b.popularity - a.popularity);
+  else if (S.sort === "length") xs.sort((a, b) => (b.episodes || 0) - (a.episodes || 0) || b.popularity - a.popularity);
   else if (S.sort === "title") xs.sort((a, b) => a.title.localeCompare(b.title));
   else xs.sort((a, b) => nt(a) - nt(b) || b.popularity - a.popularity);
   return xs;
