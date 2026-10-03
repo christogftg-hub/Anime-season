@@ -99,6 +99,39 @@ async function fetchByIds(ids) {
     d.Page.media.map(normalize).forEach(a => S.byId.set(a.id, a));
   }
 }
+// English dub schedule: AnimeSchedule.net data, republished every 15 minutes by the
+// open-source AniSchedule project, keyed by AniList id.
+const DUB_URL = "https://raw.githubusercontent.com/RockinChaos/AniSchedule/master/raw/dub-schedule.json";
+async function fetchDubs() {
+  let raw = store.get("dubs");
+  if (!raw) {
+    const r = await fetch(DUB_URL);
+    if (!r.ok) throw new Error("dub schedule " + r.status);
+    raw = (await r.json()).map(e => ({
+      id: e.media?.media?.id, ep: e.episodeNumber, from: e.subtractedEpisodeNumber || null,
+      at: Date.parse(e.episodeDate), total: e.episodes || null,
+      onBreak: !!e.delayedIndefinitely, delay: e.delayedText || null,
+    })).filter(e => e.id);
+    store.set("dubs", raw, 10 * 60e3);
+  }
+  S.dubs = new Map(raw.map(e => [e.id, e]));
+}
+// Sub = episodes already broadcast in Japan (simulcast subs land the same day).
+function subOut(a) {
+  if (a.nextEp) return a.nextEp - 1;
+  if (a.status === "FINISHED") return a.episodes || null;
+  if (a.status === "NOT_YET_RELEASED") return 0;
+  return null; // airing with no schedule (e.g. a full-season web drop): unknown
+}
+function dubOf(a) {
+  const d = S.dubs?.get(a.id);
+  if (!d) return { known: S.dubs !== null, has: false };
+  const aired = d.at <= Date.now();
+  const out = aired ? d.ep : (d.from ? d.from - 1 : d.ep - 1);
+  const next = aired || d.onBreak ? null : { at: d.at, ep: d.from ? `${d.from}–${d.ep}` : String(d.ep) };
+  return { known: true, has: true, out, next, total: d.total, onBreak: d.onBreak };
+}
+
 function normalize(m) {
   const desc = (m.description || "").replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "")
     .replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&#039;/g, "'")
@@ -122,6 +155,7 @@ const S = {
   marks: new Map(), // anime_id -> "watch" | "ignore"
   view: "all", q: "", sort: pref.get("sort", "next"), genre: null, withContinuing: pref.get("continuing", false),
   user: null, loading: true, error: null,
+  dubs: null, dubOnly: pref.get("dubOnly", false),
 };
 
 // ---------- Supabase ----------
@@ -184,6 +218,7 @@ function pool() {
 function visible() {
   let xs = pool().filter(a => {
     if (S.genre && !a.genres.includes(S.genre)) return false;
+    if (S.dubOnly && S.dubs && !S.dubs.has(a.id)) return false;
     if (S.q) { const q = S.q.toLowerCase(); if (!(a.title + " " + a.romaji + " " + a.studios.join(" ")).toLowerCase().includes(q)) return false; }
     return true;
   });
@@ -214,6 +249,7 @@ function cardHTML(a) {
       <div class="meta"><span>${esc(FMT[a.format] || a.format || "")}</span><span>·</span><span>${esc(STATUS[a.status] || "")}</span>${a.score ? `<span>·</span><span>${a.score}%</span>` : ""}</div>
       <h3 class="title">${esc(a.title)}</h3>
       ${when}
+      ${langHTML(a)}
       ${a.studios.length ? `<div class="studio">${esc(a.studios.join(", "))}</div>` : ""}
     </div>
     <div class="actions">
@@ -221,6 +257,16 @@ function cardHTML(a) {
       <button class="ghost" data-act="ignore">${mark === "ignore" ? "Unignore" : "Ignore"}</button>
     </div>
   </article>`;
+}
+
+function langHTML(a) {
+  const s = subOut(a), d = dubOf(a), tot = a.episodes ? `/${a.episodes}` : "";
+  const sub = `<span class="lang sub" title="Subtitled episodes out"><b>SUB</b>${s === null ? "?" : s}${s === null ? "" : tot}</span>`;
+  let dub;
+  if (!d.known) dub = `<span class="lang none" title="Loading dub schedule"><b>DUB</b>…</span>`;
+  else if (!d.has) dub = `<span class="lang none" title="No English dub scheduled"><b>DUB</b>none yet</span>`;
+  else dub = `<span class="lang dub" title="${d.onBreak ? "Dub on break" : "English dub episodes out"}"><b>DUB</b>${d.out}${d.total ? "/" + d.total : tot}${d.onBreak ? " · break" : ""}</span>`;
+  return `<div class="langs">${sub}${dub}</div>`;
 }
 
 function render() {
@@ -291,6 +337,11 @@ function openDetail(id) {
           <div class="fact"><div class="k">Airs</div><div class="v">${n ? esc(longFmt.format(n.t)) : esc("Premieres " + startLabel(a))}</div></div>
           <div class="fact"><div class="k">Countdown</div><div class="v">${n ? until(n.t) : "—"}</div></div>
           <div class="fact"><div class="k">Episodes</div><div class="v">${a.episodes || "TBA"}</div></div>
+          <div class="fact"><div class="k">Sub released</div><div class="v">${subOut(a) ?? "Unknown"}</div></div>
+          ${(() => { const d = dubOf(a);
+            if (!d.has) return `<div class="fact"><div class="k">Dub released</div><div class="v">${d.known ? "No English dub scheduled" : "Loading…"}</div></div>`;
+            return `<div class="fact"><div class="k">Dub released</div><div class="v">${d.out}${d.total ? " of " + d.total : ""}</div></div>
+              <div class="fact"><div class="k">Next dub</div><div class="v">${d.onBreak ? "On break" : d.next ? `Ep ${esc(d.next.ep)} · ${esc(longFmt.format(d.next.at))}` : "TBA"}</div></div>`; })()}
         </div>
       </div>
       ${a.trailer ? `<div class="video" id="video"><button type="button" id="playTrailer" aria-label="Play trailer" style="background-image:url('https://i.ytimg.com/vi/${esc(a.trailer)}/hqdefault.jpg')"><span class="playbig"></span></button></div>` : ""}
@@ -419,6 +470,8 @@ $("continuing").addEventListener("change", async e => {
   if (S.withContinuing && !S.continuing.length) await loadContinuing();
   render();
 });
+$("dubOnly").checked = S.dubOnly;
+$("dubOnly").addEventListener("change", e => { S.dubOnly = e.target.checked; pref.set("dubOnly", S.dubOnly); render(); });
 $("genres").addEventListener("click", e => { const b = e.target.closest(".gchip"); if (!b) return; S.genre = b.dataset.g || null; renderGenres(); render(); });
 $("season").addEventListener("change", e => {
   const [season, year] = e.target.value.split("-"); S.season = { season, year: Number(year) };
@@ -444,6 +497,7 @@ async function loadContinuing() {
 
 renderSeasonPicker();
 loadSeason();
+fetchDubs().then(render, () => { S.dubs = new Map(); toast("Couldn’t load the dub schedule right now."); render(); });
 
 if (sb) {
   sb.auth.onAuthStateChange((event, session) => {
