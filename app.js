@@ -15,8 +15,8 @@ const longFmt = new Intl.DateTimeFormat(undefined, { weekday: "long", day: "nume
 const wdFmt = new Intl.DateTimeFormat(undefined, { weekday: "long" });
 
 const store = {
-  get(k) { try { const v = JSON.parse(sessionStorage.getItem(k)); return v && v.exp > Date.now() ? v.data : null; } catch { return null; } },
-  set(k, data, ttl) { try { sessionStorage.setItem(k, JSON.stringify({ exp: Date.now() + ttl, data })); } catch {} },
+  get(k) { try { const v = JSON.parse(sessionStorage.getItem("v2:" + k)); return v && v.exp > Date.now() ? v.data : null; } catch { return null; } },
+  set(k, data, ttl) { try { sessionStorage.setItem("v2:" + k, JSON.stringify({ exp: Date.now() + ttl, data })); } catch {} },
 };
 const pref = {
   get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
