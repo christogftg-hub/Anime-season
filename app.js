@@ -45,7 +45,7 @@ const seasonLabel = s => `${SEASON_NAME[s.season]} ${s.year}`;
 // ---------- AniList ----------
 const FIELDS = `id title{romaji english} format status episodes season seasonYear startDate{year month day}
   description(asHtml:false) coverImage{extraLarge large color} bannerImage genres studios(isMain:true){nodes{name}}
-  averageScore popularity siteUrl trailer{id site thumbnail} nextAiringEpisode{episode airingAt}`;
+  idMal averageScore meanScore popularity siteUrl trailer{id site thumbnail} nextAiringEpisode{episode airingAt}`;
 
 async function anilist(query, variables, attempt = 0) {
   const r = await fetch("https://graphql.anilist.co", {
@@ -132,6 +132,99 @@ function dubOf(a) {
   return { known: true, has: true, out, next, total: d.total, onBreak: d.onBreak };
 }
 
+// ---------- ratings ----------
+// Combined score out of 5 from the three biggest anime databases: AniList, MyAnimeList
+// (through the Jikan API) and Kitsu. Each site's score is converted to /5 and averaged
+// over whichever sites have rated the show. Shown once at least one episode is out.
+const R = { mal: new Map(), kitsu: new Map(), malTried: new Set(), kitsuTried: new Set(), jikanDown: false };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+(() => {
+  const c = store.get("ratings");
+  if (c) { R.mal = new Map(c.mal); R.kitsu = new Map(c.kitsu); c.mal.forEach(([id]) => R.malTried.add(id)); c.kitsu.forEach(([id]) => R.kitsuTried.add(id)); }
+})();
+function saveRatings() { store.set("ratings", { mal: [...R.mal], kitsu: [...R.kitsu] }, 30 * 60e3); }
+
+let ratingJob = Promise.resolve();
+function loadRatings(list, season) {
+  ratingJob = ratingJob.then(() => fetchRatings(list, season)).catch(() => {}).then(() => { saveRatings(); render(); });
+}
+async function fetchRatings(list, season) {
+  const ids = [...new Set(list.map(a => a.idMal).filter(Boolean))];
+  // Kitsu: look shows up by their MyAnimeList id, 20 at a time.
+  const kNeed = ids.filter(id => !R.kitsuTried.has(id));
+  for (let i = 0; i < kNeed.length; i += 20) {
+    const chunk = kNeed.slice(i, i + 20);
+    try {
+      const u = `https://kitsu.app/api/edge/mappings?filter[externalSite]=myanimelist/anime&filter[externalId]=${chunk.join(",")}` +
+        `&include=item&fields[anime]=averageRating,userCount,slug&page[limit]=20`;
+      const j = await (await fetch(u)).json();
+      const inc = new Map((j.included || []).map(x => [x.id, x.attributes]));
+      (j.data || []).forEach(m => {
+        const at = inc.get(m.relationships?.item?.data?.id);
+        if (at && at.averageRating) R.kitsu.set(Number(m.attributes.externalId), { score: Number(at.averageRating), votes: at.userCount, slug: at.slug });
+      });
+      chunk.forEach(id => R.kitsuTried.add(id));
+    } catch { break; }
+    render();
+  }
+  // MyAnimeList via Jikan: one request per 25 shows of the season, then single shows.
+  if (R.jikanDown) return;
+  const mNeed = () => ids.filter(id => !R.malTried.has(id));
+  if (season && mNeed().length > 10) {
+    for (let p = 1; p <= 6; p++) {
+      try {
+        const r = await fetch(`https://api.jikan.moe/v4/seasons/${season.year}/${season.season.toLowerCase()}?page=${p}`);
+        if (r.status === 429) { await sleep(1500); p--; continue; }
+        const j = await r.json();
+        (j.data || []).forEach(x => { R.malTried.add(x.mal_id); if (x.score) R.mal.set(x.mal_id, { score: x.score, votes: x.scored_by }); });
+        render();
+        if (!j.pagination?.has_next_page) break;
+        await sleep(700);
+      } catch { R.jikanDown = true; return; }
+    }
+  }
+  const byId = new Map(list.map(a => [a.idMal, a]));
+  for (const id of mNeed().filter(id => (subOut(byId.get(id)) || 0) >= 1).slice(0, 40)) {
+    try {
+      const r = await fetch(`https://api.jikan.moe/v4/anime/${id}`);
+      if (r.status === 429) { await sleep(2000); continue; }
+      const x = (await r.json()).data;
+      R.malTried.add(id);
+      if (x && x.score) { R.mal.set(id, { score: x.score, votes: x.scored_by }); render(); }
+      await sleep(1100);
+    } catch { R.jikanDown = true; return; }
+  }
+}
+function ratingOf(a) {
+  const out = subOut(a) || 0;
+  if (out < 1) return { eligible: false, value: null, parts: [] };
+  const parts = [];
+  const al = a.score ?? a.mean;
+  if (al) parts.push({ site: "AniList", v: al / 20, raw: `${al}/100`, url: a.url });
+  const m = R.mal.get(a.idMal);
+  if (m) parts.push({ site: "MyAnimeList", v: m.score / 2, raw: `${m.score.toFixed(2)}/10`, url: `https://myanimelist.net/anime/${a.idMal}` });
+  const k = R.kitsu.get(a.idMal);
+  if (k) parts.push({ site: "Kitsu", v: k.score / 20, raw: `${k.score.toFixed(0)}/100`, url: `https://kitsu.app/anime/${k.slug}` });
+  const value = parts.length ? Math.round(parts.reduce((s, p) => s + p.v, 0) / parts.length * 10) / 10 : null;
+  return { eligible: true, value, parts };
+}
+function stars(v) {
+  return `<span class="stars" aria-hidden="true"><span style="width:${(v / 5) * 100}%"></span></span>`;
+}
+function ratingHTML(a) {
+  const r = ratingOf(a);
+  if (!r.eligible) return "";
+  if (r.value === null) return `<div class="rating none">Not rated yet</div>`;
+  return `<div class="rating" title="${esc(r.parts.map(p => `${p.site} ${p.raw}`).join(" · "))}">${stars(r.value)}<b>${r.value.toFixed(1)}</b><span>/5</span></div>`;
+}
+function ratingFactHTML(a) {
+  const r = ratingOf(a);
+  if (!r.eligible) return `<div class="fact"><div class="k">Rating</div><div class="v">After episode 1</div></div>`;
+  if (r.value === null) return `<div class="fact"><div class="k">Rating</div><div class="v">Not rated yet</div></div>`;
+  return `<div class="fact wide"><div class="k">Rating</div><div class="v rating big">${stars(r.value)}<b>${r.value.toFixed(1)}</b><span>/5</span></div>
+    <div class="sources">${r.parts.map(p => `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.site)} ${esc(p.raw)}</a>`).join("")}</div></div>`;
+}
+
 function normalize(m) {
   const desc = (m.description || "").replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "")
     .replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&#039;/g, "'")
@@ -142,7 +235,7 @@ function normalize(m) {
     episodes: m.episodes, season: m.season, seasonYear: m.seasonYear,
     start: sd.year ? [sd.year, sd.month, sd.day] : null, synopsis: desc,
     cover: m.coverImage?.extraLarge || m.coverImage?.large, color: m.coverImage?.color, banner: m.bannerImage,
-    genres: m.genres || [], studios: (m.studios?.nodes || []).map(n => n.name), score: m.averageScore,
+    genres: m.genres || [], studios: (m.studios?.nodes || []).map(n => n.name), score: m.averageScore, mean: m.meanScore, idMal: m.idMal,
     popularity: m.popularity || 0, url: m.siteUrl,
     trailer: m.trailer && m.trailer.site === "youtube" ? m.trailer.id : null,
     nextEp: m.nextAiringEpisode?.episode ?? null, nextAt: m.nextAiringEpisode?.airingAt ?? null,
@@ -170,6 +263,7 @@ async function loadMarks() {
   if (error) { toast("Couldn’t load your watchlist. Reload to try again."); return; }
   data.forEach(r => S.marks.set(r.anime_id, r.status));
   await fetchByIds([...S.marks.keys()]).catch(() => {});
+  loadRatings([...S.marks.keys()].map(id => S.byId.get(id)).filter(Boolean));
   render();
 }
 
@@ -224,7 +318,7 @@ function visible() {
   });
   const nt = a => nextOf(a)?.t ?? Infinity;
   if (S.sort === "pop") xs.sort((a, b) => b.popularity - a.popularity);
-  else if (S.sort === "score") xs.sort((a, b) => (b.score || 0) - (a.score || 0) || b.popularity - a.popularity);
+  else if (S.sort === "score") xs.sort((a, b) => (ratingOf(b).value ?? -1) - (ratingOf(a).value ?? -1) || b.popularity - a.popularity);
   else if (S.sort === "released") xs.sort((a, b) => (subOut(b) ?? -1) - (subOut(a) ?? -1) || (dubOf(b).out ?? -1) - (dubOf(a).out ?? -1) || b.popularity - a.popularity);
   else if (S.sort === "dubbed") xs.sort((a, b) => (dubOf(b).out ?? -1) - (dubOf(a).out ?? -1) || b.popularity - a.popularity);
   else if (S.sort === "length") xs.sort((a, b) => (b.episodes || 0) - (a.episodes || 0) || b.popularity - a.popularity);
@@ -249,7 +343,8 @@ function cardHTML(a) {
       ${w ? '<span class="pin">ON LIST</span>' : ""}${shade}
     </div>
     <div class="cbody">
-      <div class="meta"><span>${esc(FMT[a.format] || a.format || "")}</span><span>·</span><span>${esc(STATUS[a.status] || "")}</span>${a.score ? `<span>·</span><span>${a.score}%</span>` : ""}</div>
+      <div class="meta"><span>${esc(FMT[a.format] || a.format || "")}</span><span>·</span><span>${esc(STATUS[a.status] || "")}</span></div>
+      ${ratingHTML(a)}
       <h3 class="title">${esc(a.title)}</h3>
       ${when}
       ${langHTML(a)}
@@ -340,6 +435,7 @@ function openDetail(id) {
           <div class="fact"><div class="k">Airs</div><div class="v">${n ? esc(longFmt.format(n.t)) : esc("Premieres " + startLabel(a))}</div></div>
           <div class="fact"><div class="k">Countdown</div><div class="v">${n ? until(n.t) : "—"}</div></div>
           <div class="fact"><div class="k">Episodes</div><div class="v">${a.episodes || "TBA"}</div></div>
+          ${ratingFactHTML(a)}
           <div class="fact"><div class="k">Sub released</div><div class="v">${subOut(a) ?? "Unknown"}</div></div>
           ${(() => { const d = dubOf(a);
             if (!d.has) return `<div class="fact"><div class="k">Dub released</div><div class="v">${d.known ? "No English dub scheduled" : "Loading…"}</div></div>`;
@@ -488,13 +584,14 @@ async function loadSeason() {
   $("list").innerHTML = `<div class="empty"><b>Loading ${esc(seasonLabel(S.season))}</b>Pulling the latest schedule from AniList.</div>`;
   try {
     S.list = await fetchSeason(S.season);
+    loadRatings(S.list, S.season);
     S.list.forEach(a => S.byId.set(a.id, a));
     if (S.withContinuing) await loadContinuing();
   } catch (err) { S.error = err.message || "Network error"; }
   S.loading = false; renderHeader(); renderGenres(); render();
 }
 async function loadContinuing() {
-  try { S.continuing = await fetchContinuing(S.season); S.continuing.forEach(a => S.byId.set(a.id, a)); }
+  try { S.continuing = await fetchContinuing(S.season); S.continuing.forEach(a => S.byId.set(a.id, a)); loadRatings(S.continuing); }
   catch { toast("Couldn’t load continuing shows."); }
 }
 
